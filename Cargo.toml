@@ -1,0 +1,4 @@
+[dependencies]
+winit = "0.28"
+skia-safe = { version = "0.48", features = ["gl"] }
+glutin = "0.31" # For OpenGL context creation
