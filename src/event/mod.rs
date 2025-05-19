@@ -1,16 +1,8 @@
-#[derive(Debug, Clone, Copy)]
-pub enum MouseButton {
-    Left,
-    Right,
-    Middle,
-}
+// Copyright 2025 Bluegill Studios.
+// Licensed under the GNU General Public License, v2.0.
 
-#[derive(Debug, Clone)]
-pub enum Event {
-    MouseDown { x: i32, y: i32, button: MouseButton },
-    MouseUp { x: i32, y: i32, button: MouseButton },
-    MouseMove { x: i32, y: i32 },
+pub mod input;
+pub mod types;
 
-    KeyDown { keycode: u32 },
-    KeyUp { keycode: u32 },
-}
+pub use types::Event;
+pub use input::translate_event;
