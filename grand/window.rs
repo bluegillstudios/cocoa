@@ -2,17 +2,16 @@
 // Licensed under the GNU General Public License v2.0.
 
 use winit::{
-    dpi::LogicalSize,
+    dpi::{LogicalSize, PhysicalSize},
     event::WindowEvent,
     window::{Window as WinitWindow, WindowBuilder},
     event_loop::EventLoopWindowTarget,
 };
 
 use crate::widget::Widget;
-use crate::renderer::Renderer;
 
 use glutin::{
-    ContextBuilder, PossiblyCurrent, window::WindowBuilder as GlutinWindowBuilder, ContextWrapper, dpi::PhysicalSize,
+    ContextBuilder, PossiblyCurrent, window::WindowBuilder as GlutinWindowBuilder, ContextWrapper,
 };
 use skia_safe::{
     gpu::{BackendRenderTarget, DirectContext, SurfaceOrigin},
@@ -20,7 +19,7 @@ use skia_safe::{
 };
 use winit::event_loop::EventLoop;
 
-pub struct GlSkiaContext {
+pub struct GpuSkiaRenderer {
     context: ContextWrapper<PossiblyCurrent, winit::window::Window>,
     gr_context: DirectContext,
     surface: Surface,
@@ -28,8 +27,27 @@ pub struct GlSkiaContext {
     height: u32,
 }
 
-impl GlSkiaContext {
-    pub fn new(event_loop: &EventLoop<()>, width: u32, height: u32, title: &str) -> Self {
+impl GpuSkiaRenderer {
+    pub fn new(winit_window: &winit::window::Window) -> Self {
+        let size = winit_window.inner_size();
+        let event_loop = winit_window
+            .event_loop()
+            .expect("Failed to get event loop from window");
+
+        // Since we need the EventLoop to build Glutin context, 
+        // it's better to pass the EventLoop separately to Window::new (see below).
+        // For now, this function assumes the caller provides it.
+
+        panic!("Use Window::new_with_event_loop instead to create GpuSkiaRenderer"); // If this ever goes off, it's fucked.
+    }
+
+    pub fn new_with_event_loop<T>(
+        event_loop: &EventLoopWindowTarget<T>,
+        title: &str,
+        width: u32,
+        height: u32,
+    ) -> (Self, winit::window::Window) {
+        // Build Glutin context with window
         let wb = GlutinWindowBuilder::new()
             .with_title(title)
             .with_inner_size(PhysicalSize::new(width, height));
@@ -41,11 +59,13 @@ impl GlSkiaContext {
             .make_current()
             .expect("Failed to make context current");
 
+        let winit_window = windowed_context.window().clone();
+
         let gl = glow::Context::from_loader_function(|s| {
             windowed_context.get_proc_address(s) as *const _
         });
 
-        let mut gr_context = DirectContext::new_gl(Some(&gl), None)
+        let gr_context = DirectContext::new_gl(Some(&gl), None)
             .expect("Failed to create GrDirectContext");
 
         let fb_info = {
@@ -65,7 +85,7 @@ impl GlSkiaContext {
         );
 
         let surface = Surface::from_backend_render_target(
-            &mut gr_context,
+            &gr_context,
             &backend_render_target,
             SurfaceOrigin::BottomLeft,
             ColorType::RGBA8888,
@@ -74,13 +94,16 @@ impl GlSkiaContext {
         )
         .expect("Failed to create Skia Surface");
 
-        Self {
-            context: windowed_context,
-            gr_context,
-            surface,
-            width,
-            height,
-        }
+        (
+            Self {
+                context: windowed_context,
+                gr_context,
+                surface,
+                width,
+                height,
+            },
+            winit_window,
+        )
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -121,25 +144,14 @@ impl GlSkiaContext {
         .expect("Failed to recreate Skia Surface");
     }
 
-    pub fn draw(&mut self) {
+    pub fn draw(&mut self, root_widget: &mut dyn Widget) {
         let canvas = self.surface.canvas();
 
         // Clear background white
         canvas.clear(Color::WHITE);
 
-        // Draw a filled blue rectangle
-        let mut paint = Paint::default();
-        paint.set_anti_alias(true);
-        paint.set_color(Color::from_argb(255, 100, 149, 237)); // cornflower blue
-        paint.set_style(PaintStyle::Fill);
-        let rect = Rect::from_xywh(50.0, 50.0, 200.0, 100.0);
-        canvas.draw_rect(rect, &paint);
-
-        // Draw black text on top
-        paint.set_color(Color::BLACK);
-        let typeface = Typeface::default();
-        let font = Font::new(typeface, 24.0);
-        canvas.draw_str("cocoa", (60, 120), &font, &paint);
+        // Draw the widget tree on the canvas
+        root_widget.render(canvas);
 
         // Flush drawing commands and swap buffers
         self.surface.flush_and_submit();
@@ -149,22 +161,27 @@ impl GlSkiaContext {
 
 pub struct Window {
     winit_window: WinitWindow,
-    widgets: Vec<Box<dyn Widget>>,
-    renderer: Renderer,
+    renderer: GpuSkiaRenderer,
+    root_widget: Box<dyn Widget>,
+    size: PhysicalSize<u32>,
 }
 
 impl Window {
-    pub fn new<T>(event_loop: &EventLoopWindowTarget<T>, title: &str, width: u32, height: u32) -> Self {
-        let winit_window = WindowBuilder::new()
-            .with_title(title)
-            .with_inner_size(LogicalSize::new(width as f64, height as f64))
-            .build(event_loop)
-            .expect("Failed to create window");
+    pub fn new<T>(
+        event_loop: &EventLoopWindowTarget<T>,
+        title: &str,
+        width: u32,
+        height: u32,
+        root_widget: Box<dyn Widget>,
+    ) -> Self {
+        let (renderer, winit_window) = GpuSkiaRenderer::new_with_event_loop(event_loop, title, width, height);
+        let size = winit_window.inner_size();
 
-        Window {
+        Self {
             winit_window,
-            widgets: Vec::new(),
-            renderer: Renderer::new(),
+            renderer,
+            root_widget,
+            size,
         }
     }
 
@@ -172,20 +189,32 @@ impl Window {
         self.winit_window.id()
     }
 
-    pub fn add_widget(&mut self, widget: Box<dyn Widget>) {
-        self.widgets.push(widget);
-    }
-
     pub fn handle_event(&mut self, event: &WindowEvent) {
-        for widget in self.widgets.iter_mut() {
-            widget.handle_event(event);
+        use winit::event::WindowEvent;
+
+        match event {
+            WindowEvent::Resized(new_size) => {
+                self.size = *new_size;
+                self.renderer.resize(new_size.width, new_size.height);
+                self.winit_window.request_redraw();
+            }
+            WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                self.size = **new_inner_size;
+                self.renderer.resize(new_inner_size.width, new_inner_size.height);
+                self.winit_window.request_redraw();
+            }
+            _ => {
+                // Forward other events to the widget tree
+                self.root_widget.handle_event(event);
+            }
         }
     }
-    pub fn render(&mut self) {
-        for widget in self.widgets.iter_mut() {
-            widget.render(&mut self.renderer);
-        }
 
-        // Present the rendered content to the window (TODO: backend-specific)
+    pub fn render(&mut self) {
+        self.renderer.draw(self.root_widget.as_mut());
+    }
+
+    pub fn request_redraw(&self) {
+        self.winit_window.request_redraw();
     }
 }
