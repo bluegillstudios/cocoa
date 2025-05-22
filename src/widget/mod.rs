@@ -13,7 +13,7 @@ use skia_safe::Canvas;
 use crate::event::Event;
 
 pub trait Widget {
-    fn draw(&mut self, canvas: &mut Canvas);
-    fn on_event(&mut self, event: &Event) -> bool;
+    fn draw(&mut self, canvas: &mut skia_safe::Canvas);
+    fn on_event(&mut self, event: &Event) -> bool; 
     fn layout(&mut self, rect: skia_safe::Rect);
 }
