@@ -2,9 +2,11 @@
 // Licensed under the GNU General Public License v2.0.
 
 use crate::window::Window;
+use crate::widget::Widget; 
 use winit::{
     event::{Event, WindowEvent},
     event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder,
 };
 
 pub struct App {
@@ -12,16 +14,21 @@ pub struct App {
 }
 
 impl App {
-    // Create a new instance. 
     pub fn new() -> Self {
-        let event_loop = EventLoop::new();
-        App {
-            event_loop: Some(event_loop),
+        Self {
+            event_loop: Some(EventLoop::new()),
         }
     }
 
-    pub fn run(mut self, mut window: Window) {
+    pub fn run(mut self, mut root_widget: Box<dyn Widget>) {
         if let Some(event_loop) = self.event_loop.take() {
+            let winit_window = WindowBuilder::new()
+                .with_title("Cocoa GUI")
+                .build(&event_loop)
+                .unwrap();
+
+            let mut window = Window::new(winit_window, root_widget);
+
             event_loop.run(move |event, _, control_flow| {
                 *control_flow = ControlFlow::Wait;
 
@@ -33,7 +40,7 @@ impl App {
                         *control_flow = ControlFlow::Exit;
                     }
 
-                    Event::WindowEvent { event, .. } => {
+                    Event::WindowEvent { event, window_id } if window_id == window.id() => {
                         window.handle_event(&event);
                     }
 
@@ -41,10 +48,13 @@ impl App {
                         window.render();
                     }
 
-                    _ => (),
+                    Event::MainEventsCleared => {
+                        // window.request_redraw();
+                    }
+
+                    _ => {}
                 }
             });
         }
     }
 }
-Explanation
